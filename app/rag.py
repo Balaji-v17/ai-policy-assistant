@@ -1,36 +1,34 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import faiss
+import json
+import os
+from sentence_transformers import SentenceTransformer
+import logging
 
-app = FastAPI()
+class RAGSystem:
+    def __init__(self):
+        # Ultra-lightweight model for Render stability
+        self.model_name = 'paraphrase-albert-small-v2' 
+        self.index_path = 'faiss_index.bin'
+        self.data_path = 'policy_data/'
+        
+        try:
+            logging.info("Loading AI Librarian...")
+            self.model = SentenceTransformer(self.model_name)
+            self.index = faiss.read_index(self.index_path)
+            self.documents = self._load_documents()
+        except Exception as e:
+            logging.error(f"Init Error: {e}")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    def _load_documents(self):
+        docs = []
+        if os.path.exists(self.data_path):
+            for filename in sorted(os.listdir(self.data_path)):
+                if filename.endswith('.json'):
+                    with open(os.path.join(self.data_path, filename), 'r') as f:
+                        docs.append(json.load(f).get('content', ''))
+        return docs
 
-# Crucial: Keep this as None. DO NOT call RAGSystem() here.
-rag_engine = None
-
-@app.get("/")
-async def root():
-    # This route MUST be lightning fast so Render sees it immediately
-    return {"status": "online", "message": "Policy AI Backend is Live"}
-
-class QueryRequest(BaseModel):
-    query: str
-
-@app.post("/api/query")
-async def handle_query(request: QueryRequest):
-    global rag_engine
-    if rag_engine is None:
-        from app.rag import RAGSystem
-        rag_engine = RAGSystem()
-    
-    try:
-        result = await rag_engine.query(request.query)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    async def query(self, user_query: str):
+        question_embedding = self.model.encode([user_query])
+        distances, indices = self.index.search(question_embedding, k=3)
+        return [self.documents[i] for i in indices[0] if i < len(self.documents)]
