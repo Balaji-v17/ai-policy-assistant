@@ -1,29 +1,45 @@
-from sentence_transformers import SentenceTransformer
 import faiss
-import numpy as np
+import json
+import os
+from sentence_transformers import SentenceTransformer
+import logging
 
-# Load embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+class RAGSystem:
+    def __init__(self):
+        self.model_name = 'all-MiniLM-L6-v2'
+        self.index_path = 'faiss_index.bin'
+        self.data_path = 'policy_data/'
+        
+        # We load these ONLY when the class is instantiated
+        logging.info("Initializing AI Librarian...")
+        try:
+            self.model = SentenceTransformer(self.model_name)
+            self.index = faiss.read_index(self.index_path)
+            self.documents = self._load_documents()
+            logging.info("AI Librarian is ready!")
+        except Exception as e:
+            logging.error(f"Failed to load RAG components: {e}")
+            raise e
 
-# Sample policy data (we will replace later)
-documents = [
-    "Electric vehicle policy provides subsidies for EV buyers.",
-    "Startup policy supports entrepreneurs with funding and tax benefits.",
-    "Education policy focuses on digital learning and infrastructure."
-]
+    def _load_documents(self):
+        docs = []
+        for filename in os.listdir(self.data_path):
+            if filename.endswith('.json'):
+                with open(os.path.join(self.data_path, filename), 'r') as f:
+                    data = json.load(f)
+                    # Assuming each JSON has a 'content' field
+                    docs.append(data.get('content', ''))
+        return docs
 
-# Convert documents to embeddings
-doc_embeddings = model.encode(documents)
-
-# Create FAISS index
-dimension = doc_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(np.array(doc_embeddings))
-
-
-def search(query, top_k=2):
-    query_embedding = model.encode([query])
-    distances, indices = index.search(np.array(query_embedding), top_k)
-
-    results = [documents[i] for i in indices[0]]
-    return results
+    async def query(self, user_query: str):
+        # 1. Generate embedding for the question
+        question_embedding = self.model.encode([user_query])
+        
+        # 2. Search FAISS index (return top 3 results)
+        distances, indices = self.index.search(question_embedding, k=3)
+        
+        # 3. Pull the actual text from our docs
+        context_chunks = [self.documents[i] for i in indices[0] if i < len(self.documents)]
+        
+        # We'll pass this context to the Generator (Gemini) in the next step
+        return context_chunks
